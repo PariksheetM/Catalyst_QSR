@@ -1,0 +1,28 @@
+{
+  "name": "catalyst-qsr-api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "db:migrate": "node scripts/migrate.js",
+    "db:migrate:node": "node scripts/migrate-node.js",
+    "db:migrate:safe": "node scripts/migrate-safe.js",
+    "db:check": "node scripts/db-check.js",
+    "db:seed:images": "node scripts/seed-menu-from-images.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "mysql2": "^3.11.3",
+    "razorpay": "^2.9.6"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.7"
+  }
+}
