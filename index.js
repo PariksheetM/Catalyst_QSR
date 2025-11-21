@@ -493,6 +493,24 @@ app.delete('/api/branches/:id', requireSuper, async (req, res) => {
 
 // Keep using helper from razorpay.js
 
+// Root endpoint - API info
+app.get('/', (req, res) => {
+  res.json({
+    name: 'Catalyst QSR API',
+    version: '1.0.0',
+    status: 'running',
+    endpoints: {
+      health: '/api/health',
+      dbHealth: '/api/db-health',
+      branches: '/api/branches',
+      canteens: '/api/canteens',
+      orders: '/api/orders',
+      menu: '/api/canteens/:id/menu'
+    },
+    documentation: 'See API documentation for full endpoint list'
+  });
+});
+
 // Health
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, time: new Date().toISOString() });
