@@ -11,7 +11,8 @@
     "db:migrate:node": "node scripts/migrate-node.js",
     "db:migrate:safe": "node scripts/migrate-safe.js",
     "db:check": "node scripts/db-check.js",
-    "db:seed:images": "node scripts/seed-menu-from-images.js"
+    "db:seed:images": "node scripts/seed-menu-from-images.js",
+    "postinstall": "echo 'Backend dependencies installed successfully'"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

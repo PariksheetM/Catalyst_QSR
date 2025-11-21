@@ -15,7 +15,35 @@ const SUPER_ADMIN_PASS = process.env.SUPER_ADMIN_PASS || 'super123';
 const ADMIN_JWT_SECRET = process.env.JWT_ADMIN_SECRET || 'dev_admin_secret';
 
 const app = express();
-app.use(cors());
+
+// CORS configuration for production
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Allow requests with no origin (mobile apps, Postman, etc.)
+    if (!origin) return callback(null, true);
+    
+    const allowedOrigins = [
+      'http://localhost:5173',
+      'http://192.168.1.7:5173',
+      process.env.FRONTEND_URL, // Add your Hostinger domain in Render env vars
+    ].filter(Boolean); // Remove undefined values
+    
+    // Allow any origin in development
+    if (process.env.NODE_ENV !== 'production') {
+      return callback(null, true);
+    }
+    
+    // Check if origin is allowed
+    if (allowedOrigins.indexOf(origin) !== -1 || origin.includes('.hostinger.') || origin.includes('.onrender.com')) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+};
+
+app.use(cors(corsOptions));
 // Increase JSON body limit to support larger pasted images (base64 inflates size)
 app.use(express.json({ limit: '50mb' }));
 // Serve uploaded images
@@ -74,9 +102,24 @@ app.post('/api/uploads/image', requireStoreOrSuper, async (req, res) => {
 })
 
 // Super admin login (no password required as requested)
-app.post('/api/admin/super/login', (_req, res) => {
-  const token = signToken({ role: 'super' });
-  res.json({ token, role: 'super' });
+app.post('/api/admin/super/login', async (req, res) => {
+  try {
+    const { email, password } = req.body || {};
+    if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
+    
+    const rows = await query('SELECT id, email, password_hash, role FROM users WHERE email = ? AND role = ?', [email, 'super']);
+    if (!rows.length) return res.status(401).json({ error: 'Invalid credentials' });
+    
+    const user = rows[0];
+    const ok = await bcrypt.compare(password, user.password_hash);
+    if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
+    
+    const token = signToken({ role: 'super' });
+    res.json({ token, role: 'super' });
+  } catch (err) {
+    console.error('POST /api/admin/super/login error', err);
+    res.status(500).json({ error: 'Login failed' });
+  }
 });
 
 // Create store admin (super only)
@@ -99,19 +142,122 @@ app.post('/api/admin/canteens/:id/admin', requireSuper, async (req, res) => {
 // Store admin login (role store)
 app.post('/api/admin/store/login', async (req, res) => {
   try {
-    const { email, password } = req.body || {};
+    const { email, password, canteenId } = req.body || {};
     if (!email || !password) return res.status(400).json({ error: 'email & password required' });
+    if (!canteenId) return res.status(400).json({ error: 'canteen selection required' });
+    
     const rows = await query('SELECT id, email, password_hash, role, store_id FROM users WHERE email = ?', [email]);
     if (!rows.length) return res.status(401).json({ error: 'invalid credentials' });
     const u = rows[0];
     if (u.role !== 'store') return res.status(403).json({ error: 'not store admin' });
+    
+    // Verify the selected canteen matches user's assigned canteen (if they have one)
+    // OR allow them to access the selected canteen if they don't have a specific assignment
+    if (u.store_id && u.store_id !== canteenId) {
+      return res.status(403).json({ error: 'You do not have access to this canteen' });
+    }
+    
     const ok = await bcrypt.compare(password, u.password_hash);
     if (!ok) return res.status(401).json({ error: 'invalid credentials' });
-    const token = signToken({ role: 'store', storeId: u.store_id });
-    res.json({ token, role: 'store', storeId: u.store_id });
+    
+    const token = signToken({ role: 'store', storeId: canteenId });
+    res.json({ token, role: 'store', storeId: canteenId });
   } catch (err) {
     console.error('POST /api/admin/store/login error', err);
     res.status(500).json({ error: 'login failed' });
+  }
+});
+
+// Store admin change password
+app.post('/api/admin/store/change-password', requireStoreOrSuper, async (req, res) => {
+  try {
+    const { currentPassword, newPassword, storeId } = req.body || {};
+    if (!currentPassword || !newPassword) return res.status(400).json({ error: 'Current and new password required' });
+    if (req.user.role !== 'store' || req.user.storeId !== storeId) {
+      return res.status(403).json({ error: 'Unauthorized' });
+    }
+
+    const rows = await query('SELECT id, password_hash FROM users WHERE store_id = ? AND role = ?', [storeId, 'store']);
+    if (!rows.length) return res.status(404).json({ error: 'User not found' });
+
+    const user = rows[0];
+    const ok = await bcrypt.compare(currentPassword, user.password_hash);
+    if (!ok) return res.status(401).json({ error: 'Current password incorrect' });
+
+    const newHash = await bcrypt.hash(newPassword, 10);
+    await query('UPDATE users SET password_hash = ? WHERE id = ?', [newHash, user.id]);
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('POST /api/admin/store/change-password error', err);
+    res.status(500).json({ error: 'Failed to change password' });
+  }
+});
+
+// Store admin change email
+app.post('/api/admin/store/change-email', requireStoreOrSuper, async (req, res) => {
+  try {
+    const { newEmail, storeId } = req.body || {};
+    if (!newEmail) return res.status(400).json({ error: 'New email required' });
+    if (req.user.role !== 'store' || req.user.storeId !== storeId) {
+      return res.status(403).json({ error: 'Unauthorized' });
+    }
+
+    // Check if email already exists
+    const existing = await query('SELECT id FROM users WHERE email = ?', [newEmail]);
+    if (existing.length) return res.status(400).json({ error: 'Email already in use' });
+
+    await query('UPDATE users SET email = ? WHERE store_id = ? AND role = ?', [newEmail, storeId, 'store']);
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('POST /api/admin/store/change-email error', err);
+    res.status(500).json({ error: 'Failed to change email' });
+  }
+});
+
+// Super admin change password
+app.post('/api/admin/super/change-password', requireSuper, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body || {};
+    if (!currentPassword || !newPassword) return res.status(400).json({ error: 'Current and new password required' });
+
+    const rows = await query('SELECT id, password_hash FROM users WHERE role = ? LIMIT 1', ['super']);
+    if (!rows.length) return res.status(404).json({ error: 'Super admin not found' });
+
+    const user = rows[0];
+    const ok = await bcrypt.compare(currentPassword, user.password_hash);
+    if (!ok) return res.status(401).json({ error: 'Current password incorrect' });
+
+    const newHash = await bcrypt.hash(newPassword, 10);
+    await query('UPDATE users SET password_hash = ? WHERE id = ?', [newHash, user.id]);
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('POST /api/admin/super/change-password error', err);
+    res.status(500).json({ error: 'Failed to change password' });
+  }
+});
+
+// Super admin change email
+app.post('/api/admin/super/change-email', requireSuper, async (req, res) => {
+  try {
+    const { newEmail } = req.body || {};
+    if (!newEmail) return res.status(400).json({ error: 'New email required' });
+
+    // Check if email already exists
+    const existing = await query('SELECT id FROM users WHERE email = ? AND role != ?', [newEmail, 'super']);
+    if (existing.length) return res.status(400).json({ error: 'Email already in use' });
+
+    const rows = await query('SELECT id FROM users WHERE role = ? LIMIT 1', ['super']);
+    if (!rows.length) return res.status(404).json({ error: 'Super admin not found' });
+
+    await query('UPDATE users SET email = ? WHERE id = ?', [newEmail, rows[0].id]);
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('POST /api/admin/super/change-email error', err);
+    res.status(500).json({ error: 'Failed to change email' });
   }
 });
 
